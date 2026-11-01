@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tasks</title>
+    <meta name="theme-color" content="#f5f2ea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16181a" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Tasks" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div id="shell" class="shell">
+      <header class="topbar">
+        <div class="greeting">
+          <p class="eyebrow" id="greeting">Good morning</p>
+          <h1 id="headline">Today</h1>
+        </div>
+        <nav class="tabs" aria-label="Sections">
+          <a href="#today" data-tab="today">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg>
+            <span>Today</span>
+          </a>
+          <a href="#routines" data-tab="routines">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
+            <span>Routines</span>
+          </a>
+          <a href="#settings" data-tab="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9zM10 20a2 2 0 0 0 4 0" /></svg>
+            <span>Reminders</span>
+          </a>
+        </nav>
+      </header>
+
+      <main>
+        <!-- TODAY: daily checklist + persistent to-do list -->
+        <section class="view view-today" data-view="today">
+          <article class="card" id="daily">
+            <header class="card-head">
+              <div>
+                <h2>Daily</h2>
+                <p class="sub" id="daily-sub"></p>
+              </div>
+              <div class="daynav">
+                <button class="icon-btn" id="day-prev" aria-label="Previous day">
+                  <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+                </button>
+                <button class="chip" id="day-today" hidden>Back to today</button>
+                <button class="icon-btn" id="day-next" aria-label="Next day">
+                  <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" /></svg>
+                </button>
+              </div>
+            </header>
+            <div class="progress" aria-hidden="true"><div class="progress-bar" id="daily-progress"></div></div>
+            <ul class="list" id="daily-list"></ul>
+          </article>
+
+          <article class="card" id="todos">
+            <header class="card-head">
+              <div>
+                <h2>To-do</h2>
+                <p class="sub" id="todo-sub"></p>
+              </div>
+            </header>
+            <form id="todo-add" class="add-row" autocomplete="off">
+              <input name="title" placeholder="Add a to-do…" aria-label="New to-do" maxlength="200" />
+              <button class="icon-btn" type="button" id="todo-add-more" aria-label="Due date and reminder" aria-expanded="false" title="Due date &amp; reminder">
+                <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9zM10 20a2 2 0 0 0 4 0" /></svg>
+              </button>
+              <button class="btn primary" type="submit">Add</button>
+              <div class="add-more" hidden>
+                <label class="field"><span>Due</span><input type="datetime-local" name="due_at" /></label>
+                <label class="field"><span>Remind me</span><input type="datetime-local" name="remind_at" /></label>
+              </div>
+            </form>
+            <ul class="list" id="todo-list"></ul>
+            <details class="done-group" id="todo-done-group" hidden>
+              <summary><span id="todo-done-count"></span></summary>
+              <ul class="list" id="todo-done-list"></ul>
+              <button class="btn ghost small" id="todo-clear">Clear completed</button>
+            </details>
+          </article>
+        </section>
+
+        <!-- ROUTINES: configure what shows up on which days -->
+        <section class="view" data-view="routines" hidden>
+          <article class="card">
+            <header class="card-head">
+              <div>
+                <h2>Routines</h2>
+                <p class="sub">Tasks that show up on your daily list. Pick every day, or specific days of the week.</p>
+              </div>
+              <button class="btn primary" id="routine-new">New routine</button>
+            </header>
+            <div class="week" id="week" role="tablist" aria-label="Filter by day"></div>
+            <ul class="list" id="routine-list"></ul>
+          </article>
+        </section>
+
+        <!-- SETTINGS: reminders + timezone -->
+        <section class="view" data-view="settings" hidden>
+          <article class="card">
+            <header class="card-head">
+              <div>
+                <h2>Reminders</h2>
+                <p class="sub">Get a Discord message when it's time to do a routine, when something passes its due time, or at a to-do's reminder time.</p>
+              </div>
+            </header>
+            <form class="setting stack" id="discord-form" autocomplete="off">
+              <div>
+                <h3>Discord</h3>
+                <p class="sub" id="discord-status">Checking…</p>
+              </div>
+              <label class="field">
+                <span>Webhook URL</span>
+                <input type="url" id="discord-url" name="url" inputmode="url" spellcheck="false"
+                  placeholder="https://discord.com/api/webhooks/…" />
+              </label>
+              <label class="field">
+                <span>Mention me <small>(optional: your Discord user ID)</small></span>
+                <input id="discord-user" name="user" inputmode="numeric" spellcheck="false" placeholder="123456789012345678" />
+              </label>
+              <p class="error" id="discord-error" hidden></p>
+              <div class="setting-actions">
+                <button class="btn primary" type="submit">Save</button>
+                <button class="btn" type="button" id="notify-test">Send a test ping</button>
+                <span class="spacer"></span>
+                <button class="btn ghost danger" type="button" id="discord-remove" hidden>Disconnect</button>
+              </div>
+            </form>
+            <div class="setting">
+              <div>
+                <h3>Time zone</h3>
+                <p class="sub">Routine times like 6:00 AM are read in this time zone.</p>
+              </div>
+              <div class="setting-actions">
+                <select id="tz-select" aria-label="Time zone"></select>
+              </div>
+            </div>
+          </article>
+          <div class="hint">
+            <p><strong>Setting up the webhook:</strong> in Discord, open your server's <em>Server Settings → Integrations →
+            Webhooks → New Webhook</em>, pick the channel, then <em>Copy Webhook URL</em> and paste it above.</p>
+            <p><strong>Mention me</strong> makes Discord notify your phone even if the channel is set to <em>Only @mentions</em>.
+            To get your ID, turn on <em>Settings → Advanced → Developer Mode</em>, then right-click (or long-press)
+            your name and choose <em>Copy User ID</em>.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Routine editor -->
+    <dialog id="routine-dialog" class="sheet">
+      <form method="dialog" id="routine-form">
+        <h2 id="routine-dialog-title">New routine</h2>
+        <label class="field">
+          <span>What</span>
+          <input name="title" required maxlength="200" placeholder="Read my Bible" />
+        </label>
+        <fieldset class="field">
+          <legend>Days</legend>
+          <div class="presets">
+            <button type="button" class="chip" data-preset="0123456">Every day</button>
+            <button type="button" class="chip" data-preset="12345">Weekdays</button>
+            <button type="button" class="chip" data-preset="06">Weekends</button>
+          </div>
+          <div class="daypicker" id="daypicker"></div>
+        </fieldset>
+        <div class="two">
+          <label class="field">
+            <span>Ping me at <small>(optional)</small></span>
+            <input type="time" name="remind_at" />
+          </label>
+          <label class="field">
+            <span>Overdue after <small>(optional)</small></span>
+            <input type="time" name="due_by" />
+          </label>
+        </div>
+        <label class="field">
+          <span>Notes <small>(optional)</small></span>
+          <textarea name="notes" rows="2" maxlength="2000" placeholder="e.g. Proverbs chapter of the day"></textarea>
+        </label>
+        <p class="error" id="routine-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn danger ghost" id="routine-delete" hidden>Delete</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn ghost" value="cancel" data-close>Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- To-do editor -->
+    <dialog id="todo-dialog" class="sheet">
+      <form method="dialog" id="todo-form">
+        <h2>Edit to-do</h2>
+        <label class="field">
+          <span>What</span>
+          <input name="title" required maxlength="200" />
+        </label>
+        <div class="two">
+          <label class="field"><span>Due <small>(optional)</small></span><input type="datetime-local" name="due_at" /></label>
+          <label class="field"><span>Remind me <small>(optional)</small></span><input type="datetime-local" name="remind_at" /></label>
+        </div>
+        <label class="field">
+          <span>Notes <small>(optional)</small></span>
+          <textarea name="notes" rows="3" maxlength="2000"></textarea>
+        </label>
+        <p class="error" id="todo-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn danger ghost" id="todo-delete">Delete</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn ghost" data-close>Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
