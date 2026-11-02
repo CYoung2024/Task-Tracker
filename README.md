@@ -5,6 +5,12 @@ A personal task tracker for LAN use.
 - **Daily**: a checklist that resets every day. Each routine is set to show up every day
   (e.g. *Read my Bible*) or on certain weekdays only (e.g. *Clean the house* on Saturdays).
   You can step back to earlier days, and a streak counter shows how many scheduled days in a row you've done it.
+- **Longer-out routines**: every so many days, weeks, months or years, counted from the routine's start date
+  (every 3 months starting Jan 1 gives Jan 1, Apr 1, Jul 1, Oct 1). Every routine has a start date,
+  today by default, and the Routines tab lists them all together, soonest first.
+  Unlike weekly routines, a missed one stays on your daily list, marked with its due date, until you check it off or
+  the next one comes around. Its ping can go out days ahead of the date instead of on the day, and neither ping repeats
+  while it waits. If the day doesn't exist in a shorter month, it lands on that month's last day.
 - **To-do**: a regular to-do list that stays put from day to day until you check things off. Items with a due date come first, soonest on top. Below them, new items land at the top of the undated ones, and you can drag the handle on the left of an undated item to reorder.
   Items can have a due time and/or a reminder time.
 - **Reminders**: messages posted to a Discord channel by a webhook:
@@ -91,5 +97,6 @@ server/
   discord.js     webhook message format + sending
   db.js, time.js
 public/          the front end (index.html, app.js, styles.css)
+  schedule.js    pure "when does this routine come around" logic, also used by the server
 test/            node:test suites
 ```

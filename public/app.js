@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { isCycleUnit, nextOccurrence, upcomingOccurrences } from './schedule.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -12,7 +13,6 @@ const state = {
   daily: null,
   todos: { open: [], done: [] },
   routines: [],
-  routineFilter: 'all',
   settings: null,
 };
 
@@ -58,6 +58,52 @@ function daysLabel(days) {
   if (key === '12345') return 'Weekdays';
   if (key === '06') return 'Weekends';
   return days.map((d) => DAY_SHORT[d]).join(', ');
+}
+
+function fmtDay(ymd, options = { month: 'short', day: 'numeric' }) {
+  return dateFromYMD(ymd).toLocaleDateString([], options);
+}
+
+function ordinal(n) {
+  const suffix = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${suffix[(v - 20) % 10] ?? suffix[v] ?? suffix[0]}`;
+}
+
+/** "Every 3 months on the 1st · Jan, Apr, Jul, Oct" */
+function cycleLabel(r) {
+  const every = r.repeat_every;
+  const start = dateFromYMD(r.start_date);
+  const dayOfMonth = `on the ${ordinal(start.getDate())}`;
+  switch (r.repeat_unit) {
+    case 'day':
+      return every === 1 ? 'Every day' : `Every ${every} days`;
+    case 'week':
+      return `Every ${every === 1 ? 'week' : `${every} weeks`} on ${DAY_SHORT[start.getDay()]}`;
+    case 'year':
+      return `Every ${every === 1 ? 'year' : `${every} years`} on ${fmtDay(r.start_date)}`;
+    default: {
+      if (every === 1) return `Every month ${dayOfMonth}`;
+      if (every !== 3) return `Every ${every} months ${dayOfMonth}`;
+      const months = [0, 1, 2, 3]
+        .map((k) => (start.getMonth() + k * 3) % 12)
+        .sort((a, b) => a - b)
+        .map((m) => new Date(2000, m, 1).toLocaleDateString([], { month: 'short' }));
+      return `Every 3 months ${dayOfMonth} · ${months.join(', ')}`;
+    }
+  }
+}
+
+/** "today", "in 3 days", "in 2 months"… */
+function fmtUntil(ymd, from) {
+  const days = Math.round((dateFromYMD(ymd) - dateFromYMD(from)) / 86_400_000);
+  const plural = (n, unit) => `in ${n} ${unit}${n === 1 ? '' : 's'}`;
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days < 14) return plural(days, 'day');
+  if (days < 60) return plural(Math.round(days / 7), 'week');
+  if (days < 365) return plural(Math.round(days / 30.4), 'month');
+  return plural(Math.round(days / 365), 'year');
 }
 
 /** ISO instant -> value for <input type="datetime-local"> in the browser's zone. */
@@ -157,8 +203,10 @@ function renderDaily() {
   $('#daily-list').innerHTML = routines
     .map((r) => {
       const meta = [];
-      if (r.remind_at) meta.push(`<span class="meta">${ICON.bell}${fmtClock(r.remind_at)}</span>`);
-      if (r.due_by) meta.push(`<span class="meta ${r.status === 'overdue' ? 'bad' : ''}">${ICON.clock}${r.status === 'overdue' ? 'Overdue · ' : 'by '}${fmtClock(r.due_by)}</span>`);
+      const waiting = r.occurrence !== date;
+      if (waiting) meta.push(`<span class="meta ${r.status === 'overdue' ? 'bad' : ''}">${ICON.clock}Due ${esc(fmtDay(r.occurrence))}</span>`);
+      if (r.remind_at && !r.remind_days_before) meta.push(`<span class="meta">${ICON.bell}${fmtClock(r.remind_at)}</span>`);
+      if (r.due_by && !waiting) meta.push(`<span class="meta ${r.status === 'overdue' ? 'bad' : ''}">${ICON.clock}${r.status === 'overdue' ? 'Overdue · ' : 'by '}${fmtClock(r.due_by)}</span>`);
       if (r.status === 'missed') meta.push('<span class="meta muted">Missed</span>');
       if (r.streak > 1) meta.push(`<span class="meta streak" title="${r.streak} in a row">${ICON.flame}${r.streak}</span>`);
       return `
@@ -434,50 +482,94 @@ async function loadRoutines() {
   }
 }
 
-function renderRoutines() {
-  const all = state.routines;
-  const todayDow = state.today ? dateFromYMD(state.today).getDay() : new Date().getDay();
-  const filters = [{ key: 'all', label: 'All', count: all.length }].concat(
-    DAY_SHORT.map((label, d) => ({ key: String(d), label, count: all.filter((r) => r.days.includes(d)).length, today: d === todayDow }))
-  );
-  $('#week').innerHTML = filters
-    .map(
-      (f) => `
-      <button role="tab" class="week-day ${state.routineFilter === f.key ? 'active' : ''} ${f.today ? 'is-today' : ''}"
-        aria-selected="${state.routineFilter === f.key}" data-filter="${f.key}">
-        <span class="week-label">${f.label}</span>
-        <span class="week-count">${f.count}</span>
-      </button>`
-    )
-    .join('');
+function routineTimes(r) {
+  const meta = [];
+  const ahead = r.remind_days_before;
+  if (r.remind_at) meta.push(`<span class="meta">${ICON.bell}${ahead ? `${ahead} day${ahead === 1 ? '' : 's'} ahead, ` : ''}${fmtClock(r.remind_at)}</span>`);
+  if (r.due_by) meta.push(`<span class="meta">${ICON.clock}by ${fmtClock(r.due_by)}</span>`);
+  return meta;
+}
 
-  const list = state.routineFilter === 'all' ? all : all.filter((r) => r.days.includes(Number(state.routineFilter)));
-  if (!list.length) {
-    $('#routine-list').innerHTML = `
-      <li class="empty">
-        <p>${all.length ? 'Nothing on this day yet.' : 'No routines yet. Add things like "Read my Bible" every day, or "Clean the house" on Saturdays.'}</p>
-      </li>`;
-    return;
-  }
-  $('#routine-list').innerHTML = list
-    .map((r) => {
-      const meta = [];
-      if (r.remind_at) meta.push(`<span class="meta">${ICON.bell}${fmtClock(r.remind_at)}</span>`);
-      if (r.due_by) meta.push(`<span class="meta">${ICON.clock}by ${fmtClock(r.due_by)}</span>`);
-      return `
-        <li class="item routine" data-id="${r.id}">
-          <button class="item-body as-button" data-edit>
-            <span class="item-title">${esc(r.title)}</span>
-            <span class="days">${DAY_LETTER.map((l, d) => `<span class="${r.days.includes(d) ? 'on' : ''}">${l}</span>`).join('')}
-              <span class="days-label">${esc(daysLabel(r.days))}</span></span>
-          </button>
-          <div class="item-meta">${meta.join('')}<span class="chev">${ICON.chevron}</span></div>
-        </li>`;
-    })
-    .join('');
+function repeatSummary(r) {
+  if (isCycleUnit(r.repeat_unit)) return `<span class="repeat-label">${esc(cycleLabel(r))}</span>`;
+  return `<span class="days">${DAY_LETTER.map((l, d) => `<span class="${r.days.includes(d) ? 'on' : ''}">${l}</span>`).join('')}
+    <span class="days-label">${esc(daysLabel(r.days))}</span></span>`;
+}
+
+function routineItem(r, next) {
+  const fullDate = fmtDay(next, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return `
+    <li class="item routine" data-id="${r.id}">
+      <span class="date-tile" title="${esc(fullDate)}">
+        <span class="date-tile-month">${esc(fmtDay(next, { month: 'short' }))}</span>
+        <span class="date-tile-day">${dateFromYMD(next).getDate()}</span>
+      </span>
+      <button class="item-body as-button" data-edit>
+        <span class="item-title">${esc(r.title)}</span>
+        ${repeatSummary(r)}
+      </button>
+      <div class="item-meta"><span class="meta" title="${esc(fullDate)}">${esc(fmtUntil(next, state.today))}</span>${routineTimes(r).join('')}<span class="chev">${ICON.chevron}</span></div>
+    </li>`;
+}
+
+function renderRoutines() {
+  const upcoming = state.routines
+    .map((r) => ({ r, next: nextOccurrence(r, state.today) }))
+    .sort((a, b) => a.next.localeCompare(b.next));
+  $('#routine-list').innerHTML = upcoming.length
+    ? upcoming.map(({ r, next }) => routineItem(r, next)).join('')
+    : '<li class="empty"><p>No routines yet. Add things like "Read my Bible" every day, "Clean the house" on Saturdays, or "Review the budget" every 3 months.</p></li>';
 }
 
 let editingRoutine = null;
+let repeatMode = 'weekly'; // the dialog's "Repeats" choice: 'weekly' or 'custom' (every so many days, weeks...)
+
+function setRepeatMode(mode) {
+  repeatMode = mode;
+  const form = $('#routine-form');
+  for (const b of $$('#repeat-picker button')) {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+  $('#repeat-weekly').hidden = mode !== 'weekly';
+  $('#repeat-custom').hidden = mode !== 'custom';
+  $('#repeat-ping-ahead').hidden = mode !== 'custom';
+  // A hidden, invalid number mustn't block saving.
+  form.repeat_every.disabled = mode !== 'custom';
+  form.remind_days_before.disabled = mode !== 'custom';
+  renderRepeatPreview();
+}
+
+function scheduleFromForm() {
+  const form = $('#routine-form');
+  const start_date = form.start_date.value;
+  if (repeatMode === 'weekly') return { repeat_unit: 'weekdays', days: pickedDays(), start_date };
+  return {
+    repeat_unit: form.repeat_unit.value,
+    repeat_every: Number(form.repeat_every.value),
+    remind_days_before: Number(form.remind_days_before.value) || 0,
+    start_date,
+  };
+}
+
+/** Spell out the coming dates so you can see the schedule is what you meant before saving. */
+function renderRepeatPreview() {
+  const el = $('#repeat-preview');
+  const schedule = scheduleFromForm();
+  const every = schedule.repeat_every;
+  const valid = schedule.start_date && (schedule.days ? schedule.days.length > 0 : Number.isInteger(every) && every >= 1 && every <= 999);
+  el.hidden = !valid;
+  if (!valid) return;
+  const dates = upcomingOccurrences(schedule, state.today, 4);
+  let year = state.today.slice(0, 4);
+  const parts = dates.map((d) => {
+    const showYear = d.slice(0, 4) !== year;
+    year = d.slice(0, 4);
+    return fmtDay(d, { month: 'short', day: 'numeric', year: showYear ? 'numeric' : undefined });
+  });
+  el.innerHTML = `Next: <strong>${esc(parts[0])}</strong> · ${parts.slice(1).map(esc).join(' · ')}`;
+}
 
 function setPickedDays(days) {
   for (const b of $$('#daypicker button')) {
@@ -500,8 +592,12 @@ function openRoutine(id) {
   form.notes.value = r?.notes ?? '';
   form.remind_at.value = r?.remind_at ?? '';
   form.due_by.value = r?.due_by ?? '';
-  const filterDay = state.routineFilter === 'all' ? null : Number(state.routineFilter);
-  setPickedDays(r?.days ?? (filterDay === null ? [0, 1, 2, 3, 4, 5, 6] : [filterDay]));
+  setPickedDays(r?.days ?? []);
+  form.repeat_every.value = r && isCycleUnit(r.repeat_unit) ? r.repeat_every : 30;
+  form.repeat_unit.value = r && isCycleUnit(r.repeat_unit) ? r.repeat_unit : 'day';
+  form.remind_days_before.value = r?.remind_days_before || '';
+  form.start_date.value = r?.start_date ?? state.today;
+  setRepeatMode(r && isCycleUnit(r.repeat_unit) ? 'custom' : 'weekly');
   $('#routine-delete').hidden = !r;
   $('#routine-error').hidden = true;
   $('#routine-dialog').showModal();
@@ -514,7 +610,7 @@ async function saveRoutine(e) {
   const body = {
     title: form.title.value,
     notes: form.notes.value,
-    days: pickedDays(),
+    ...scheduleFromForm(),
     remind_at: form.remind_at.value || null,
     due_by: form.due_by.value || null,
   };
@@ -691,21 +787,20 @@ function bindEvents() {
     if (!b) return;
     b.classList.toggle('on');
     b.setAttribute('aria-pressed', String(b.classList.contains('on')));
+    renderRepeatPreview();
   });
-  for (const p of $$('[data-preset]')) {
-    p.addEventListener('click', () => setPickedDays([...p.dataset.preset].map(Number)));
-  }
   $('#routine-new').addEventListener('click', () => openRoutine(null));
   $('#routine-list').addEventListener('click', (e) => {
     const li = e.target.closest('.item');
     if (li) openRoutine(Number(li.dataset.id));
   });
-  $('#week').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-filter]');
-    if (!b) return;
-    state.routineFilter = b.dataset.filter;
-    renderRoutines();
+  $('#repeat-picker').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mode]');
+    if (b) setRepeatMode(b.dataset.mode);
   });
+  $('#routine-form').repeat_every.addEventListener('input', renderRepeatPreview);
+  $('#routine-form').repeat_unit.addEventListener('change', renderRepeatPreview);
+  $('#routine-form').start_date.addEventListener('input', renderRepeatPreview);
   $('#routine-form').addEventListener('submit', saveRoutine);
   $('#routine-delete').addEventListener('click', deleteRoutine);
 

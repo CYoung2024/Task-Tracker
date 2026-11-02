@@ -1,14 +1,19 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { localParts } from './time.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS routines (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   title       TEXT    NOT NULL,
   notes       TEXT    NOT NULL DEFAULT '',
-  days        TEXT    NOT NULL DEFAULT '0123456', -- weekday digits, 0 = Sunday
+  days        TEXT    NOT NULL DEFAULT '0123456', -- weekday digits, 0 = Sunday (repeat_unit 'weekdays' only)
+  repeat_unit TEXT    NOT NULL DEFAULT 'weekdays', -- 'weekdays', or a cycle: 'day', 'week', 'month', 'year'
+  repeat_every INTEGER NOT NULL DEFAULT 1,       -- cycles: every this many units
+  start_date  TEXT,                              -- 'YYYY-MM-DD' local date: nothing happens before this
   remind_at   TEXT,                              -- 'HH:MM' local time: "time to do it" ping
+  remind_days_before INTEGER NOT NULL DEFAULT 0, -- cycles: send that ping this many days ahead of the date
   due_by      TEXT,                              -- 'HH:MM' local time: overdue ping if not done
   sort_order  INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -72,6 +77,32 @@ function migrate(db) {
         ) AS ranked
         WHERE todos.id = ranked.id;
       `);
+    });
+  }
+
+  const routineColumns = db.prepare('PRAGMA table_info(routines)').all().map((c) => c.name);
+  if (!routineColumns.includes('repeat_unit')) {
+    transaction(db, () => {
+      db.exec(`
+        ALTER TABLE routines ADD COLUMN repeat_unit TEXT NOT NULL DEFAULT 'weekdays';
+        ALTER TABLE routines ADD COLUMN repeat_every INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE routines ADD COLUMN start_date TEXT;
+      `);
+    });
+  }
+
+  const routineColumnsNow = db.prepare('PRAGMA table_info(routines)').all().map((c) => c.name);
+  if (!routineColumnsNow.includes('remind_days_before')) {
+    db.exec('ALTER TABLE routines ADD COLUMN remind_days_before INTEGER NOT NULL DEFAULT 0');
+  }
+
+  // Routines from before start dates existed started the day they were added.
+  const undated = db.prepare('SELECT id, created_at FROM routines WHERE start_date IS NULL').all();
+  if (undated.length) {
+    const tz = getSetting(db, 'timezone') || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const update = db.prepare('UPDATE routines SET start_date = ? WHERE id = ?');
+    transaction(db, () => {
+      for (const r of undated) update.run(localParts(new Date(r.created_at), tz).date, r.id);
     });
   }
 }

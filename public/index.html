@@ -39,11 +39,11 @@
 
       <main>
         <!-- TODAY: daily checklist + persistent to-do list -->
-        <section class="view view-today" data-view="today">
+        <section class="view view-split" data-view="today">
           <article class="card" id="daily">
             <header class="card-head">
               <div>
-                <h2>Daily</h2>
+                <h2>Routine</h2>
                 <p class="sub" id="daily-sub"></p>
               </div>
               <div class="daynav">
@@ -87,17 +87,16 @@
           </article>
         </section>
 
-        <!-- ROUTINES: configure what shows up on which days -->
+        <!-- ROUTINES: everything that repeats, whatever the schedule, soonest first -->
         <section class="view" data-view="routines" hidden>
           <article class="card">
             <header class="card-head">
               <div>
                 <h2>Routines</h2>
-                <p class="sub">Tasks that show up on your daily list. Pick every day, or specific days of the week.</p>
+                <p class="sub">Everything that repeats, soonest first. On days of the week, or every so many days, weeks, months or years.</p>
               </div>
               <button class="btn primary" id="routine-new">New routine</button>
             </header>
-            <div class="week" id="week" role="tablist" aria-label="Filter by day"></div>
             <ul class="list" id="routine-list"></ul>
           </article>
         </section>
@@ -163,14 +162,33 @@
           <input name="title" required maxlength="200" placeholder="Read my Bible" />
         </label>
         <fieldset class="field">
-          <legend>Days</legend>
-          <div class="presets">
-            <button type="button" class="chip" data-preset="0123456">Every day</button>
-            <button type="button" class="chip" data-preset="12345">Weekdays</button>
-            <button type="button" class="chip" data-preset="06">Weekends</button>
+          <legend>Repeats</legend>
+          <div class="presets" id="repeat-picker">
+            <button type="button" class="chip" data-mode="weekly">Days of the week</button>
+            <button type="button" class="chip" data-mode="custom">Every…</button>
           </div>
+        </fieldset>
+        <fieldset class="field" id="repeat-weekly">
+          <legend>Days</legend>
           <div class="daypicker" id="daypicker"></div>
         </fieldset>
+        <div class="field" id="repeat-custom" role="group" aria-label="Repeat every">
+          <span>Every</span>
+          <div class="every-row">
+            <input type="number" name="repeat_every" min="1" max="999" step="1" aria-label="How many" />
+            <select name="repeat_unit" aria-label="Unit">
+              <option value="day">days</option>
+              <option value="week">weeks</option>
+              <option value="month">months</option>
+              <option value="year">years</option>
+            </select>
+          </div>
+        </div>
+        <label class="field">
+          <span>Starts</span>
+          <input type="date" name="start_date" />
+        </label>
+        <p class="repeat-preview" id="repeat-preview"></p>
         <div class="two">
           <label class="field">
             <span>Ping me at <small>(optional)</small></span>
@@ -181,6 +199,10 @@
             <input type="time" name="due_by" />
           </label>
         </div>
+        <label class="field" id="repeat-ping-ahead">
+          <span>Days ahead to ping <small>(optional: blank pings on the day)</small></span>
+          <input type="number" name="remind_days_before" min="0" max="365" step="1" placeholder="0" />
+        </label>
         <label class="field">
           <span>Notes <small>(optional)</small></span>
           <textarea name="notes" rows="2" maxlength="2000" placeholder="e.g. Proverbs chapter of the day"></textarea>

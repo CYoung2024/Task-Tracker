@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isCycleUnit, latestOccurrence } from '../public/schedule.js';
 import { getSetting, setSetting, transaction } from './db.js';
 import { isValidUserId, isValidWebhookUrl, mentionUserId, sendDiscord, webhookUrl } from './discord.js';
 import { userTimeZone } from './scheduler.js';
@@ -50,11 +51,25 @@ function cleanDays(value) {
   return days.sort().join('');
 }
 
-function routineInput(body) {
+function cleanSchedule(body, today) {
+  const unit = body.repeat_unit ?? 'weekdays';
+  const start_date = body.start_date || today;
+  if (!isValidDate(start_date)) throw bad('Start date must be a real date');
+  if (unit === 'weekdays') return { days: cleanDays(body.days), repeat_unit: unit, repeat_every: 1, start_date, remind_days_before: 0 };
+  if (!isCycleUnit(unit)) throw bad('Repeat must be days of the week, or every so many days, weeks, months or years');
+  const every = Number(body.repeat_every);
+  if (!Number.isInteger(every) || every < 1 || every > 999) throw bad('Repeat every must be a whole number from 1 to 999');
+  const ahead = Number(body.remind_days_before ?? 0);
+  if (!Number.isInteger(ahead) || ahead < 0 || ahead > 365) throw bad('Days ahead must be a whole number from 0 to 365');
+  if (ahead > 0 && !body.remind_at) throw bad('Pick a "Ping me at" time for the days-ahead ping');
+  return { days: '0123456', repeat_unit: unit, repeat_every: every, start_date, remind_days_before: ahead };
+}
+
+function routineInput(body, today) {
   return {
     title: cleanTitle(body.title),
     notes: cleanNotes(body.notes),
-    days: cleanDays(body.days),
+    ...cleanSchedule(body, today),
     remind_at: cleanTime(body.remind_at, 'Reminder time'),
     due_by: cleanTime(body.due_by, 'Due-by time'),
   };
@@ -87,26 +102,25 @@ export function createApp(db) {
     const weekday = weekdayOf(date);
 
     const routines = db.prepare(`SELECT * FROM routines ${ROUTINE_ORDER}`).all();
-    const completions = db
-      .prepare('SELECT routine_id, date, completed_at FROM routine_completions WHERE date >= ?')
-      .all(addDays(date, -400));
+    const completions = db.prepare('SELECT routine_id, date, completed_at FROM routine_completions').all();
     const doneByRoutine = new Map();
     for (const c of completions) {
       if (!doneByRoutine.has(c.routine_id)) doneByRoutine.set(c.routine_id, new Map());
       doneByRoutine.get(c.routine_id).set(c.date, c.completed_at);
     }
 
-    const items = routines
-      .filter((r) => r.days.includes(String(weekday)))
-      .map((r) => {
-        const done = doneByRoutine.get(r.id) ?? new Map();
-        const completedAt = done.get(date) ?? null;
-        let status = 'pending';
-        if (completedAt) status = 'done';
-        else if (date < now.date) status = 'missed';
-        else if (date === now.date && r.due_by && now.minutes > parseHHMM(r.due_by)) status = 'overdue';
-        return { ...routineOut(r), completed_at: completedAt, status, streak: streak(r, done, date, tz) };
-      });
+    const items = routines.flatMap((r) => {
+      const done = doneByRoutine.get(r.id) ?? new Map();
+      const occurrence = occurrenceShownOn(r, date, done, tz);
+      if (!occurrence) return [];
+      const completedAt = done.get(occurrence) ?? null;
+      let status = 'pending';
+      if (completedAt) status = 'done';
+      else if (date < now.date) status = occurrenceShownOn(r, now.date, done, tz) === occurrence ? 'overdue' : 'missed';
+      else if (occurrence < date) status = 'overdue';
+      else if (date === now.date && r.due_by && now.minutes > parseHHMM(r.due_by)) status = 'overdue';
+      return [{ ...routineOut(r), occurrence, completed_at: completedAt, status, streak: streak(r, done, date, tz) }];
+    });
 
     res.json({ date, weekday, today: now.date, timezone: tz, routines: items });
   });
@@ -115,11 +129,14 @@ export function createApp(db) {
     const id = Number(req.params.id);
     const { date, done } = req.body ?? {};
     if (!isValidDate(date)) throw bad('Invalid date');
-    if (!db.prepare('SELECT 1 FROM routines WHERE id = ?').get(id)) throw new HttpError(404, 'Not found');
+    const routine = db.prepare('SELECT * FROM routines WHERE id = ?').get(id);
+    if (!routine) throw new HttpError(404, 'Not found');
+    // Checking off a routine that has been waiting since an earlier date completes that occurrence.
+    const occurrence = latestOccurrence(routine, date) ?? date;
     if (done) {
-      db.prepare('INSERT OR IGNORE INTO routine_completions (routine_id, date) VALUES (?, ?)').run(id, date);
+      db.prepare('INSERT OR IGNORE INTO routine_completions (routine_id, date) VALUES (?, ?)').run(id, occurrence);
     } else {
-      db.prepare('DELETE FROM routine_completions WHERE routine_id = ? AND date = ?').run(id, date);
+      db.prepare('DELETE FROM routine_completions WHERE routine_id = ? AND date = ?').run(id, occurrence);
     }
     res.json({ ok: true });
   });
@@ -129,19 +146,27 @@ export function createApp(db) {
     res.json(db.prepare(`SELECT * FROM routines ${ROUTINE_ORDER}`).all().map(routineOut));
   });
 
+  const todayDate = () => localParts(new Date(), userTimeZone(db)).date;
+
   api.post('/routines', (req, res) => {
-    const r = routineInput(req.body ?? {});
+    const r = routineInput(req.body ?? {}, todayDate());
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO routines (title, notes, days, remind_at, due_by) VALUES (?, ?, ?, ?, ?)')
-      .run(r.title, r.notes, r.days, r.remind_at, r.due_by);
+      .prepare(
+        `INSERT INTO routines (title, notes, days, repeat_unit, repeat_every, start_date, remind_at, remind_days_before, due_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(r.title, r.notes, r.days, r.repeat_unit, r.repeat_every, r.start_date, r.remind_at, r.remind_days_before, r.due_by);
     res.status(201).json(routineOut(db.prepare('SELECT * FROM routines WHERE id = ?').get(lastInsertRowid)));
   });
 
   api.put('/routines/:id', (req, res) => {
-    const r = routineInput(req.body ?? {});
+    const r = routineInput(req.body ?? {}, todayDate());
     const { changes } = db
-      .prepare('UPDATE routines SET title = ?, notes = ?, days = ?, remind_at = ?, due_by = ? WHERE id = ?')
-      .run(r.title, r.notes, r.days, r.remind_at, r.due_by, Number(req.params.id));
+      .prepare(
+        `UPDATE routines SET title = ?, notes = ?, days = ?, repeat_unit = ?, repeat_every = ?, start_date = ?, remind_at = ?, remind_days_before = ?, due_by = ?
+         WHERE id = ?`
+      )
+      .run(r.title, r.notes, r.days, r.repeat_unit, r.repeat_every, r.start_date, r.remind_at, r.remind_days_before, r.due_by, Number(req.params.id));
     if (!changes) throw new HttpError(404, 'Not found');
     res.json(routineOut(db.prepare('SELECT * FROM routines WHERE id = ?').get(Number(req.params.id))));
   });
@@ -285,14 +310,28 @@ export function createApp(db) {
   return app;
 }
 
-/** Consecutive scheduled days completed, counting back from `date`. Today not being done yet doesn't break it. */
+/**
+ * The occurrence a routine shows for on `date`, or null if it isn't on that day's list. A cycle routine
+ * waits on the list until it's checked off or the next one comes around, so a quarterly task missed on
+ * the day isn't gone for three months. Occurrences from before the routine was added don't count.
+ */
+function occurrenceShownOn(routine, date, done, tz) {
+  const occurrence = latestOccurrence(routine, date);
+  if (!occurrence || occurrence === date) return occurrence;
+  if (!isCycleUnit(routine.repeat_unit)) return null;
+  const completedAt = done.get(occurrence);
+  if (completedAt) return localParts(new Date(completedAt), tz).date >= date ? occurrence : null;
+  return occurrence >= localParts(new Date(routine.created_at), tz).date ? occurrence : null;
+}
+
+/** Consecutive occurrences completed, counting back from `date`. The current one not being done yet doesn't break it. */
 function streak(routine, done, date, tz) {
-  const created = localParts(new Date(routine.created_at), tz).date;
+  const first = routine.start_date ?? localParts(new Date(routine.created_at), tz).date;
+  const before = (d) => latestOccurrence(routine, addDays(d, -1));
   let count = 0;
-  let d = date;
-  if (!done.has(d)) d = addDays(d, -1);
-  for (let i = 0; i < 400 && d >= created; i++, d = addDays(d, -1)) {
-    if (!routine.days.includes(String(weekdayOf(d)))) continue;
+  let d = latestOccurrence(routine, date);
+  if (d && !done.has(d)) d = before(d);
+  for (let i = 0; i < 400 && d && d >= first; i++, d = before(d)) {
     if (!done.has(d)) break;
     count++;
   }

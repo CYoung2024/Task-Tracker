@@ -1,5 +1,6 @@
 // Decides which reminders are due. Pure logic (no I/O) so it is easy to test.
-import { parseHHMM } from './time.js';
+import { occursOn } from '../public/schedule.js';
+import { addDays, parseHHMM } from './time.js';
 
 // A reminder still fires if the server was down / asleep at its exact minute,
 // as long as we notice within this window. Older ones are skipped rather than
@@ -11,6 +12,10 @@ function formatHHMM(hhmm) {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function formatDay(ymd) {
+  return new Date(`${ymd}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 /**
@@ -30,9 +35,21 @@ export function dueReminders({ now, local, routines, doneToday, todos }) {
     local.minutes - targetMinutes <= GRACE_MINUTES;
 
   for (const r of routines) {
-    if (!r.days.includes(String(local.weekday)) || doneToday.has(r.id)) continue;
+    // Tied to the date itself: a routine still waiting from an earlier date doesn't ping again.
+    const ahead = r.remind_days_before || 0;
+    const remindFor = addDays(local.date, ahead);
+    const pendingToday = occursOn(r, local.date) && !doneToday.has(r.id);
 
-    if (inWindow(parseHHMM(r.remind_at))) {
+    if (ahead > 0 && occursOn(r, remindFor) && inWindow(parseHHMM(r.remind_at))) {
+      out.push({
+        key: `routine:${r.id}:${remindFor}:remind`,
+        title: `Coming up in ${ahead} day${ahead === 1 ? '' : 's'}: ${r.title}`,
+        body: `Due ${formatDay(remindFor)}${r.notes ? `. ${r.notes}` : ''}`,
+        kind: 'remind',
+        url: '/#routines',
+      });
+    }
+    if (ahead === 0 && pendingToday && inWindow(parseHHMM(r.remind_at))) {
       out.push({
         key: `routine:${r.id}:${local.date}:remind`,
         title: `Time for: ${r.title}`,
@@ -41,7 +58,7 @@ export function dueReminders({ now, local, routines, doneToday, todos }) {
         url: '/#today',
       });
     }
-    if (inWindow(parseHHMM(r.due_by))) {
+    if (pendingToday && inWindow(parseHHMM(r.due_by))) {
       out.push({
         key: `routine:${r.id}:${local.date}:overdue`,
         title: `Overdue: ${r.title}`,
