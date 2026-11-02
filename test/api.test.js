@@ -1,5 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openDb, setSetting } from '../server/db.js';
 import { createApp } from '../server/app.js';
 import { localParts } from '../server/time.js';
@@ -68,6 +72,60 @@ test('to-dos persist and can be completed and cleared', async () => {
   await call('DELETE', '/api/todos/completed');
   list = (await call('GET', '/api/todos')).body;
   assert.equal(list.done.length, 0);
+});
+
+test('dated to-dos sort first, new undated ones land just below them, and undated ones can be reordered', async () => {
+  const add = async (title, extra) => (await call('POST', '/api/todos', { title, ...extra })).body.id;
+  const titles = async () => (await call('GET', '/api/todos')).body.open.map((t) => t.title);
+
+  const a = await add('A');
+  const later = await add('Later', { due_at: '2030-06-01T17:00:00Z' });
+  const b = await add('B');
+  const sooner = await add('Sooner', { due_at: '2030-01-01T17:00:00Z' });
+  assert.deepEqual(await titles(), ['Sooner', 'Later', 'B', 'A']);
+
+  assert.equal((await call('PUT', '/api/todos/order', { ids: [sooner, later, a, b] })).status, 200);
+  assert.deepEqual(await titles(), ['Sooner', 'Later', 'A', 'B']);
+
+  // A new undated item goes between the dated ones and the rest, even after reordering.
+  const c = await add('C');
+  assert.deepEqual(await titles(), ['Sooner', 'Later', 'C', 'A', 'B']);
+
+  // The due date always wins over a requested order.
+  await call('PUT', '/api/todos/order', { ids: [b, later, sooner, c, a] });
+  assert.deepEqual(await titles(), ['Sooner', 'Later', 'B', 'C', 'A']);
+
+  assert.equal((await call('PUT', '/api/todos/order', { ids: 'nope' })).status, 400);
+
+  // Stale list from another device: unknown ids ignored, undated items it didn't know about stay on top of the undated.
+  const d = await add('D');
+  await call('PUT', '/api/todos/order', { ids: [sooner, later, a, 99999, c, b] });
+  assert.deepEqual(await titles(), ['Sooner', 'Later', 'D', 'A', 'C', 'B']);
+
+  for (const id of [a, b, c, d, sooner, later]) await call('DELETE', `/api/todos/${id}`);
+});
+
+test('upgrading an older database keeps the existing to-do order', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-'));
+  const old = new DatabaseSync(path.join(dir, 'tasks.db'));
+  old.exec(`
+    CREATE TABLE todos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+      due_at TEXT, remind_at TEXT, completed_at TEXT, created_at TEXT NOT NULL
+    );
+    INSERT INTO todos (title, due_at, created_at) VALUES
+      ('no due, older', NULL, '2026-01-01T00:00:00.000Z'),
+      ('due later', '2030-06-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
+      ('no due, newer', NULL, '2026-01-03T00:00:00.000Z'),
+      ('due sooner', '2030-01-01T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
+  `);
+  old.close();
+
+  const db = openDb(dir);
+  const titles = db.prepare('SELECT title FROM todos ORDER BY sort_order').all().map((t) => t.title);
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(titles, ['due sooner', 'due later', 'no due, newer', 'no due, older']);
 });
 
 test('Discord settings are validated and the token is never sent back', async () => {

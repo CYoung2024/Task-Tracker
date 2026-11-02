@@ -5,7 +5,7 @@ A personal task tracker for LAN use.
 - **Daily**: a checklist that resets every day. Each routine is set to show up every day
   (e.g. *Read my Bible*) or on certain weekdays only (e.g. *Clean the house* on Saturdays).
   You can step back to earlier days, and a streak counter shows how many scheduled days in a row you've done it.
-- **To-do**: a regular to-do list that stays put from day to day until you check things off.
+- **To-do**: a regular to-do list that stays put from day to day until you check things off. Items with a due date come first, soonest on top. Below them, new items land at the top of the undated ones, and you can drag the handle on the left of an undated item to reorder.
   Items can have a due time and/or a reminder time.
 - **Reminders**: messages posted to a Discord channel by a webhook:
   - *"Time for: Read my Bible"* at a routine's **Ping me at** time (e.g. 6:00 AM)

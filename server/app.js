@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSetting, setSetting } from './db.js';
+import { getSetting, setSetting, transaction } from './db.js';
 import { isValidUserId, isValidWebhookUrl, mentionUserId, sendDiscord, webhookUrl } from './discord.js';
 import { userTimeZone } from './scheduler.js';
 import { addDays, isValidDate, isValidTimeZone, localParts, parseHHMM, weekdayOf } from './time.js';
@@ -65,6 +65,8 @@ function routineOut(r) {
 }
 
 const ROUTINE_ORDER = `ORDER BY COALESCE(remind_at, due_by, '99:99'), sort_order, id`;
+// Dated items first, soonest on top; sort_order only arranges the undated ones (and ties on a date).
+const TODO_ORDER = 'ORDER BY due_at IS NULL, due_at, sort_order, id DESC';
 
 export function createApp(db) {
   const app = express();
@@ -153,12 +155,7 @@ export function createApp(db) {
   const getTodo = (id) => db.prepare('SELECT * FROM todos WHERE id = ?').get(id);
 
   api.get('/todos', (req, res) => {
-    const open = db
-      .prepare(
-        `SELECT * FROM todos WHERE completed_at IS NULL
-         ORDER BY due_at IS NULL, due_at, created_at DESC`
-      )
-      .all();
+    const open = db.prepare(`SELECT * FROM todos WHERE completed_at IS NULL ${TODO_ORDER}`).all();
     const done = db
       .prepare('SELECT * FROM todos WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 100')
       .all();
@@ -168,9 +165,26 @@ export function createApp(db) {
   api.post('/todos', (req, res) => {
     const b = req.body ?? {};
     const { lastInsertRowid } = db
-      .prepare('INSERT INTO todos (title, notes, due_at, remind_at) VALUES (?, ?, ?, ?)')
+      .prepare(
+        `INSERT INTO todos (title, notes, due_at, remind_at, sort_order)
+         VALUES (?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 0) - 1 FROM todos))`
+      )
       .run(cleanTitle(b.title), cleanNotes(b.notes), cleanInstant(b.due_at, 'Due'), cleanInstant(b.remind_at, 'Reminder'));
     res.status(201).json(getTodo(lastInsertRowid));
+  });
+
+  api.put('/todos/order', (req, res) => {
+    const { ids } = req.body ?? {};
+    if (!Array.isArray(ids)) throw bad('ids must be a list of to-do ids');
+    transaction(db, () => {
+      const open = db.prepare(`SELECT id FROM todos WHERE completed_at IS NULL ${TODO_ORDER}`).all().map((t) => t.id);
+      const listed = [...new Set(ids.map(Number))].filter((id) => open.includes(id));
+      // Anything the client didn't know about (added on another device) stays on top, like any new item.
+      const ordered = [...open.filter((id) => !listed.includes(id)), ...listed];
+      const update = db.prepare('UPDATE todos SET sort_order = ? WHERE id = ?');
+      ordered.forEach((id, position) => update.run(position, id));
+    });
+    res.json({ ok: true });
   });
 
   api.patch('/todos/:id', (req, res) => {

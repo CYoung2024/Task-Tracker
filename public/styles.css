@@ -226,6 +226,23 @@ textarea { resize: vertical; }
 .add-more .field { margin: 0; }
 @media (max-width: 420px) { .add-more { grid-template-columns: 1fr; } }
 
+.drag-handle {
+  display: grid; place-items: center; flex: none;
+  width: 20px; height: 32px; padding: 0; margin-right: -6px;
+  border: 0; border-radius: 6px; background: none; color: var(--ink-3);
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.drag-spacer { flex: none; width: 20px; margin-right: -6px; }
+.drag-handle:hover { color: var(--ink); }
+.drag-handle:active { cursor: grabbing; }
+.item.dragging {
+  position: relative; z-index: 1;
+  background: var(--card); border-radius: 10px; box-shadow: var(--shadow);
+}
+@media (max-width: 480px) {
+  #todo-list .item-meta { padding-left: 64px; }
+}
+
 .done-group { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
 .done-group summary { cursor: pointer; color: var(--ink-2); font-size: 0.875rem; font-weight: 600; padding: 4px; }
 .done-group .btn { margin-top: 6px; }

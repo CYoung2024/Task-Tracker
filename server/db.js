@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS todos (
   due_at       TEXT,                             -- ISO timestamp (UTC)
   remind_at    TEXT,                             -- ISO timestamp (UTC)
   completed_at TEXT,
+  sort_order   INTEGER NOT NULL DEFAULT 0,           -- lowest shows first
   created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -52,7 +53,27 @@ export function openDb(dataDir) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Bring databases created by older versions up to the current schema. */
+function migrate(db) {
+  const todoColumns = db.prepare('PRAGMA table_info(todos)').all().map((c) => c.name);
+  if (!todoColumns.includes('sort_order')) {
+    // Seed from the old automatic order so existing lists don't get shuffled.
+    transaction(db, () => {
+      db.exec(`
+        ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+        UPDATE todos SET sort_order = ranked.position
+        FROM (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY due_at IS NULL, due_at, created_at DESC) AS position
+          FROM todos
+        ) AS ranked
+        WHERE todos.id = ranked.id;
+      `);
+    });
+  }
 }
 
 export function getSetting(db, key, fallback = null) {

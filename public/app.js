@@ -91,6 +91,7 @@ const ICON = {
   clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>',
   flame: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21c-3.9 0-6.5-2.6-6.5-6.2 0-3.4 2.6-5.3 3.6-8.3.9 1.4 1.4 2.6 1.4 3.9 1.6-1.3 2.6-3.6 2.4-6.4 3.6 2.4 5.6 6.5 5.6 10.4 0 3.8-2.6 6.6-6.5 6.6z" /></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>',
+  grip: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="0.75" /><circle cx="15" cy="6" r="0.75" /><circle cx="9" cy="12" r="0.75" /><circle cx="15" cy="12" r="0.75" /><circle cx="9" cy="18" r="0.75" /><circle cx="15" cy="18" r="0.75" /></svg>',
 };
 
 // ---------------------------------------------------------------- routing
@@ -204,6 +205,7 @@ function todoItem(t) {
   if (t.remind_at && !done && Date.parse(t.remind_at) > Date.now()) meta.push(`<span class="meta">${ICON.bell}${esc(fmtWhen(t.remind_at))}</span>`);
   return `
     <li class="item ${done ? 'done' : ''} ${overdue ? 'overdue' : ''}" data-id="${t.id}">
+      ${done ? '' : t.due_at ? '<span class="drag-spacer"></span>' : `<button class="drag-handle" aria-label="Reorder ${esc(t.title)}. Use the up and down arrow keys." title="Drag to reorder">${ICON.grip}</button>`}
       <button class="check" role="checkbox" aria-checked="${done}" aria-label="${esc(t.title)}">${ICON.check}</button>
       <button class="item-body as-button" data-edit>
         <span class="item-title">${esc(t.title)}</span>
@@ -214,6 +216,7 @@ function todoItem(t) {
 }
 
 function renderTodos() {
+  if (todoDrag) return; // a background refresh must not yank the list out from under a drag; the drop re-renders
   const { open, done } = state.todos;
   const overdue = open.filter((t) => t.due_at && Date.parse(t.due_at) < Date.now()).length;
   $('#todo-sub').textContent = open.length
@@ -274,6 +277,106 @@ function toggleAddMore(open) {
   panel.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
   btn.classList.toggle('on', open);
+}
+
+// Reordering. Uses pointer events rather than HTML drag-and-drop, which doesn't work on touch screens.
+// The dragged row is never moved in the DOM (that would drop its pointer capture); its neighbours
+// are moved around it instead. Items with a due date stay sorted by date above the rest, so they
+// have no handle and nothing can be dragged above them.
+
+const DRAG_SCROLL_EDGE = 90; // px from the top/bottom of the window where a drag starts scrolling
+const DRAG_SCROLL_SPEED = 8;
+
+let todoDrag = null;
+
+function todoListIds() {
+  return $$('#todo-list .item').map((li) => Number(li.dataset.id));
+}
+
+const isDatedRow = (li) => Boolean(li.querySelector('.drag-spacer'));
+
+function startTodoDrag(e) {
+  const handle = e.target.closest('.drag-handle');
+  if (!handle || e.button !== 0 || todoDrag) return;
+  const li = handle.closest('.item');
+  const rect = li.getBoundingClientRect();
+  handle.setPointerCapture(e.pointerId);
+  todoDrag = { li, pointerId: e.pointerId, y: e.clientY, grabOffset: e.clientY - rect.top, height: rect.height, startIds: todoListIds() };
+  li.classList.add('dragging');
+  requestAnimationFrame(stepTodoDrag);
+}
+
+function stepTodoDrag() {
+  if (!todoDrag) return;
+  const { y } = todoDrag;
+  if (y < DRAG_SCROLL_EDGE) window.scrollBy(0, -DRAG_SCROLL_SPEED);
+  else if (y > window.innerHeight - DRAG_SCROLL_EDGE) window.scrollBy(0, DRAG_SCROLL_SPEED);
+  layoutTodoDrag();
+  requestAnimationFrame(stepTodoDrag);
+}
+
+function layoutTodoDrag() {
+  const { li, y, grabOffset, height } = todoDrag;
+  // Where the row should appear, kept within the list.
+  const bounds = li.parentElement.getBoundingClientRect();
+  const lastDated = $$('#todo-list .item').filter(isDatedRow).at(-1);
+  const ceiling = lastDated ? lastDated.getBoundingClientRect().bottom : bounds.top;
+  const top = Math.max(ceiling, Math.min(y - grabOffset, bounds.bottom - height));
+  // Swaps go by the pointer, not the kept-within-the-list position, so the very ends stay reachable.
+  const center = y - grabOffset + height / 2;
+  const middle = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.top + r.height / 2;
+  };
+  let sibling;
+  while ((sibling = li.nextElementSibling) && center > middle(sibling)) li.before(sibling);
+  while ((sibling = li.previousElementSibling) && !isDatedRow(sibling) && center < middle(sibling)) li.after(sibling);
+
+  li.style.transform = '';
+  li.style.transform = `translateY(${top - li.getBoundingClientRect().top}px)`;
+}
+
+function moveTodoDrag(e) {
+  if (todoDrag?.pointerId === e.pointerId) todoDrag.y = e.clientY;
+}
+
+function endTodoDrag(e) {
+  if (todoDrag?.pointerId !== e.pointerId) return;
+  const { startIds } = todoDrag;
+  todoDrag.y = e.clientY;
+  layoutTodoDrag(); // the pointer may have moved since the last frame
+  const ids = e.type === 'pointerup' ? todoListIds() : startIds;
+  todoDrag = null;
+  sortOpenTodos(ids);
+  renderTodos();
+  if (ids.join() !== startIds.join()) saveTodoOrder(ids);
+}
+
+function sortOpenTodos(ids) {
+  state.todos.open.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+}
+
+async function saveTodoOrder(ids) {
+  try {
+    await api.put('/api/todos/order', { ids });
+  } catch (err) {
+    fail(err);
+    loadTodos().catch(() => {});
+  }
+}
+
+function moveTodoWithKeyboard(e) {
+  const handle = e.target.closest('.drag-handle');
+  if (!handle || todoDrag || !['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  e.preventDefault();
+  const li = handle.closest('.item');
+  const sibling = e.key === 'ArrowUp' ? li.previousElementSibling : li.nextElementSibling;
+  if (!sibling || isDatedRow(sibling)) return;
+  if (e.key === 'ArrowUp') li.after(sibling);
+  else li.before(sibling);
+  const ids = todoListIds();
+  sortOpenTodos(ids);
+  saveTodoOrder(ids);
 }
 
 let editingTodo = null;
@@ -565,6 +668,11 @@ function bindEvents() {
       else if (e.target.closest('[data-edit]')) openTodo(Number(li.dataset.id));
     });
   }
+  $('#todo-list').addEventListener('pointerdown', startTodoDrag);
+  $('#todo-list').addEventListener('pointermove', moveTodoDrag);
+  $('#todo-list').addEventListener('pointerup', endTodoDrag);
+  $('#todo-list').addEventListener('pointercancel', endTodoDrag);
+  $('#todo-list').addEventListener('keydown', moveTodoWithKeyboard);
   $('#todo-form').addEventListener('submit', saveTodo);
   $('#todo-delete').addEventListener('click', deleteTodo);
   $('#todo-clear').addEventListener('click', async () => {
