@@ -2,7 +2,7 @@
 import { getSetting } from './db.js';
 
 const WEBHOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[\w-]+$/;
-const COLORS = { remind: 0x2f6b55, overdue: 0xb5442f, info: 0x5865f2 };
+const ICONS = { remind: '🔔', overdue: '⚠️', info: '✅' };
 
 export function isValidWebhookUrl(url) {
   return typeof url === 'string' && WEBHOOK_RE.test(url);
@@ -21,21 +21,22 @@ export function mentionUserId(db) {
   return getSetting(db, 'discord_user_id') || process.env.DISCORD_USER_ID || '';
 }
 
-/** Build the webhook body for a reminder ({title, body, url, kind}). */
+/**
+ * Build the webhook body for a reminder ({title, body, url, kind}). It's all plain message text, not an
+ * embed, because phone notifications only show the text: the reminder has to come first so it's what
+ * the lock screen shows.
+ */
 export function discordMessage(n, { userId = '', appUrl = '' } = {}) {
-  const embed = {
-    title: n.title,
-    description: n.body || undefined,
-    color: COLORS[n.kind] ?? COLORS.info,
-    timestamp: new Date().toISOString(),
-  };
-  if (appUrl) embed.url = new URL(n.url || '/', appUrl).href;
+  const lines = [`${ICONS[n.kind] ?? ICONS.info} **${n.title}**`];
+  if (n.body) lines.push(n.body);
+  // Angle brackets stop Discord from adding a preview card for the link.
+  if (appUrl) lines.push(`<${new URL(n.url || '/', appUrl).href}>`);
+  // Mentioning you makes Discord notify even if the channel is set to "Only @mentions".
+  if (userId) lines[0] += ` <@${userId}>`;
   return {
     username: 'Tasks',
-    // Mentioning you makes Discord notify even if the channel is set to "Only @mentions".
-    content: userId ? `<@${userId}>` : undefined,
+    content: lines.join('\n').slice(0, 2000),
     allowed_mentions: { users: userId ? [userId] : [] },
-    embeds: [embed],
   };
 }
 

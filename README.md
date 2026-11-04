@@ -41,7 +41,7 @@ Set these as environment variables (see `.env.example`):
 | `DATA_DIR`            | `./data` | Where the SQLite database lives                                              |
 | `DISCORD_WEBHOOK_URL` | *(none)* | Optional. You can paste it on the **Reminders** tab instead; that one wins.  |
 | `DISCORD_USER_ID`     | *(none)* | Optional. Your user ID, so each reminder @mentions you. Also settable in the app. |
-| `APP_URL`             | *(none)* | Optional, e.g. `https://personal.charlestackyoung.com`. Makes each reminder's title a link back to the app. |
+| `APP_URL`             | *(none)* | Optional, e.g. `https://personal.charlestackyoung.com`. Adds a link back to the app at the end of each reminder. |
 
 Routine times are read in the time zone set on the **Reminders** tab. It's taken from your browser
 the first time you open the app.
@@ -80,8 +80,9 @@ Run a **single instance**: the reminder scheduler runs inside the server process
      then long-press your name → *Copy User ID*). Each reminder then @mentions you, which notifies
      even with the default *Only @mentions* setting.
 
-Routine reminders are green; overdue ones are red. If Discord can't be reached, the server retries
-every 30 seconds until 30 minutes after the reminder was due.
+Each reminder starts with 🔔, or ⚠️ when something is overdue, followed by what it's for, so your
+lock screen shows it. If Discord can't be reached, the server retries every 30 seconds until 30 minutes
+after the reminder was due.
 
 If the server was down when a reminder was due, it still sends it once it comes back, as long as
 that's within 30 minutes. Older reminders are skipped so you don't get a burst of stale pings.

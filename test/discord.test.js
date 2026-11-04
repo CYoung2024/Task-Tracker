@@ -37,7 +37,7 @@ test('a due routine posts one message to the webhook, never twice', async () => 
   await tick(db, new Date(SIX_AM_CHICAGO.getTime() + 60_000));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, HOOK);
-  assert.equal(calls[0].body.embeds[0].title, 'Time for: Read my Bible');
+  assert.equal(calls[0].body.content, '🔔 **Time for: Read my Bible**\nScheduled for 6:00 AM');
 });
 
 test('a failed delivery is retried on the next tick', async () => {
@@ -57,13 +57,12 @@ test('nothing is sent while no webhook is configured', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('message format: mention and colors', () => {
+test('message format: the reminder leads the text so phone notifications show it', () => {
   const msg = discordMessage({ title: 'Overdue: Trash', body: 'Due by 8:00 PM', kind: 'overdue', url: '/#today' }, { userId: '987654321098765432', appUrl: 'https://personal.example.com' });
-  assert.equal(msg.content, '<@987654321098765432>');
+  assert.equal(msg.content, '⚠️ **Overdue: Trash** <@987654321098765432>\nDue by 8:00 PM\n<https://personal.example.com/#today>');
   assert.deepEqual(msg.allowed_mentions, { users: ['987654321098765432'] });
-  assert.equal(msg.embeds[0].color, 0xb5442f);
-  assert.equal(msg.embeds[0].url, 'https://personal.example.com/#today');
-  assert.equal(discordMessage({ title: 't' }).content, undefined);
+  assert.equal(msg.embeds, undefined);
+  assert.equal(discordMessage({ title: 't' }).content, '✅ **t**');
 });
 
 test('only Discord webhook URLs are accepted', () => {
